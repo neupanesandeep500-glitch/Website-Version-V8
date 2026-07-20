@@ -1,5 +1,6 @@
 """
 server_state.py
+
 Shared, single-source-of-truth server state for the Nepal Power Plant &
 Transmission Line License Status web app. Both app.py (public dashboard)
 and admin.py (admin panel) import from here — this avoids a circular
@@ -12,10 +13,25 @@ this disk is EPHEMERAL — it's wiped on every redeploy and on some restarts.
 For uploads to survive redeploys, attach a Render Persistent Disk and point
 DATA_DIR at its mount path via the DATA_DIR environment variable. This is
 called out again in the README.
+
+GIS/PA LOADING (updated this session): parsing the district/province and
+protected-area shapefile packages is CPU/memory-heavy (pure-Python pyshp
+over a national polygon set). Running it synchronously inside a Flask
+request — as the admin upload route used to — could exceed gunicorn's
+--timeout or exhaust memory on a single-worker deploy, killing the only
+worker and taking the whole site down with it (502s, including /admin).
+start_gis_reload_async()/start_pa_reload_async() below move that work to a
+background thread so the HTTP request returns immediately; admin.py polls
+STATE['gis_loading']/['gis_load_error'] (and the pa_ equivalents) to show
+progress instead of blocking on it. A size guard (MAX_GIS_ZIP_MB) refuses
+to even attempt parsing a zip that's almost certainly too large for the
+available memory, with a clear error instead of a crash.
 """
 
 import os
+import copy
 import json
+import threading
 import traceback
 
 import data_engine as de
@@ -23,6 +39,7 @@ import data_engine as de
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data"))
 GIS_DIR = os.path.join(DATA_DIR, "gis")
 ASSETS_DIR = os.path.join(DATA_DIR, "assets")
+
 for d in (DATA_DIR, GIS_DIR, ASSETS_DIR):
     os.makedirs(d, exist_ok=True)
 
@@ -31,16 +48,30 @@ GIS_ZIP_PATH = os.path.join(GIS_DIR, "hermes_NPL_new_wgs.zip")
 PA_ZIP_PATH = os.path.join(GIS_DIR, "Protected_Area.zip")
 LOGO_PATH_JSON = os.path.join(DATA_DIR, "config.json")
 
+# Refuse to even attempt parsing a GIS/PA zip above this size — on a small
+# Render instance a very large shapefile package is more likely to OOM-kill
+# the process than to load successfully. Override via MAX_GIS_ZIP_MB if
+# you've upgraded the plan's RAM and know the package needs more room.
+MAX_GIS_ZIP_MB = int(os.environ.get("MAX_GIS_ZIP_MB", "80"))
+
 STATE = {
     "loader": None,
     "gis_loaded": False,
     "pa_loaded": False,
+    "gis_loading": False,
+    "pa_loading": False,
+    "gis_load_error": None,
+    "pa_load_error": None,
     "error": None,
     "source_label": "No data loaded yet",
     "last_sync": None,
     "logo_filename": None,
     "flag_filename": None,
 }
+
+# Serializes GIS + PA parsing so the two never run concurrently and compete
+# for the same memory budget — one background job at a time.
+_gis_lock = threading.Lock()
 
 
 def _read_config_file():
@@ -81,46 +112,176 @@ def _save_config(**updates):
     cfg.update(updates)
     with open(LOGO_PATH_JSON, "w") as f:
         json.dump(cfg, f)
+    _sync_state_from_config()
 
 
-_sync_state_from_config()
+def _check_zip_size(path, label):
+    """Raise a clear, catchable error instead of letting a huge shapefile
+    zip OOM-kill the process during parsing."""
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    if size_mb > MAX_GIS_ZIP_MB:
+        raise ValueError(
+            f"{label} is {size_mb:.0f} MB, over the {MAX_GIS_ZIP_MB} MB "
+            f"safety limit for this server's memory. Simplify the "
+            f"shapefile (e.g. `mapshaper -simplify 10%` before zipping) or "
+            f"raise MAX_GIS_ZIP_MB only if you've also upgraded the "
+            f"Render plan's RAM."
+        )
 
 
 def ensure_gis_loaded(force=False):
     """(Re)load the GIS district/province + protected-area polygons from
-    whatever has been uploaded via the admin panel, if anything."""
+    whatever has been uploaded via the admin panel, if anything. This is
+    the synchronous version — safe to call at process startup (blocking
+    briefly before the app serves traffic is fine there). Admin-panel
+    uploads should call start_gis_reload_async()/start_pa_reload_async()
+    instead, so a slow parse can't take the whole site down with it.
+
+    IMPORTANT: this reloads onto a *copy* of the shared de.GIS engine and
+    only swaps `data_engine.GIS` over to it once loading has fully
+    succeeded. Mutating the live singleton in place used to mean any
+    thread rendering the GIS map mid-reload could see a half-populated
+    engine (empty district list for a few hundred ms to a few seconds),
+    and — worse — a *failed* scheduled reload (e.g. a dropped Drive
+    connection during the 6-hourly auto-refresh) used to leave
+    STATE['gis_loaded'] flipped to False with nothing to show, even
+    though the previous data was still perfectly good. Both of those
+    looked to a visitor like the map/data 'disappearing' periodically.
+    Now a failed or in-progress reload never affects what's currently
+    being served."""
     if force:
-        STATE["gis_loaded"] = False
-        STATE["pa_loaded"] = False
-    if not STATE["gis_loaded"]:
+        # Force a re-check, but DON'T blank the flags up front — the
+        # currently-loaded (old) engine keeps serving until a new one is
+        # ready to swap in, or we give up and keep the old one anyway.
+        pass
+
+    if force or not STATE["gis_loaded"]:
         try:
+            candidate = copy.copy(de.GIS)
             if os.path.exists(GIS_ZIP_PATH):
-                ok = de.GIS.load_from_path(GIS_ZIP_PATH)
+                _check_zip_size(GIS_ZIP_PATH, "GIS package")
+                ok = candidate.load_from_path(GIS_ZIP_PATH)
             else:
-                ok = de.GIS.load()  # falls back to searching next to app.py
-            STATE["gis_loaded"] = bool(ok)
-        except Exception:
+                ok = candidate.load()
+            if ok:
+                de.GIS = candidate
+                STATE["gis_loaded"] = True
+                STATE["gis_load_error"] = None
+            elif not STATE["gis_loaded"]:
+                # Nothing was loaded before either — surface the error.
+                STATE["gis_load_error"] = candidate.error or "Loader returned no data."
+            # else: keep serving the previously-loaded (old) de.GIS as-is.
+        except Exception as exc:
             traceback.print_exc()
-            STATE["gis_loaded"] = False
-    if not STATE["pa_loaded"]:
+            if not STATE["gis_loaded"]:
+                STATE["gis_load_error"] = str(exc)
+
+    if force or not STATE["pa_loaded"]:
         try:
+            candidate = copy.copy(de.GIS)
             if os.path.exists(PA_ZIP_PATH):
-                ok = de.GIS.load_protected_from_path(PA_ZIP_PATH)
+                _check_zip_size(PA_ZIP_PATH, "Protected-area package")
+                ok = candidate.load_protected_from_path(PA_ZIP_PATH)
             else:
-                ok = de.GIS.load_protected()
-            STATE["pa_loaded"] = bool(ok)
-        except Exception:
+                ok = candidate.load_protected()
+            if ok:
+                de.GIS = candidate
+                STATE["pa_loaded"] = True
+                STATE["pa_load_error"] = None
+            elif not STATE["pa_loaded"]:
+                STATE["pa_load_error"] = "Loader returned no data."
+        except Exception as exc:
             traceback.print_exc()
-            STATE["pa_loaded"] = False
+            if not STATE["pa_loaded"]:
+                STATE["pa_load_error"] = str(exc)
+
+
+def _run_async(loading_flag, error_flag, fn):
+    def _worker():
+        with _gis_lock:
+            STATE[loading_flag] = True
+            try:
+                fn()
+            except Exception as exc:
+                traceback.print_exc()
+                STATE[error_flag] = str(exc)
+            finally:
+                STATE[loading_flag] = False
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
+def start_gis_reload_async():
+    """Call this from the admin upload/Drive-sync routes instead of
+    ensure_gis_loaded(force=True) directly. Returns immediately — the HTTP
+    request can't time out or take the (single-worker) process down with
+    it. Poll STATE['gis_loading'] / STATE['gis_load_error'] from the admin
+    panel to show progress; the public dashboard keeps serving whatever
+    was loaded before while this runs, and keeps serving it if this
+    attempt fails — see ensure_gis_loaded()'s docstring for why the
+    reload happens on a copy that's only swapped in on success."""
+
+    def _do():
+        candidate = copy.copy(de.GIS)
+        if os.path.exists(GIS_ZIP_PATH):
+            _check_zip_size(GIS_ZIP_PATH, "GIS package")
+            ok = candidate.load_from_path(GIS_ZIP_PATH)
+        else:
+            ok = candidate.load()
+        if not ok:
+            raise RuntimeError(candidate.error or "Loader returned no data.")
+        de.GIS = candidate
+        STATE["gis_loaded"] = True
+        STATE["gis_load_error"] = None
+        _reparse_current_workbook_if_any()
+
+    _run_async("gis_loading", "gis_load_error", _do)
+
+
+def start_pa_reload_async():
+    """Same as start_gis_reload_async(), for the protected-area package."""
+
+    def _do():
+        candidate = copy.copy(de.GIS)
+        if os.path.exists(PA_ZIP_PATH):
+            _check_zip_size(PA_ZIP_PATH, "Protected-area package")
+            ok = candidate.load_protected_from_path(PA_ZIP_PATH)
+        else:
+            ok = candidate.load_protected()
+        if not ok:
+            raise RuntimeError("Protected-area loader returned no data.")
+        de.GIS = candidate
+        STATE["pa_loaded"] = True
+        STATE["pa_load_error"] = None
+        _reparse_current_workbook_if_any()
+
+    _run_async("pa_loading", "pa_load_error", _do)
 
 
 def load_from_path(path, label):
+    """Parse a workbook and, only if the parse actually produced usable
+    data, make it the one being served. A failed or empty parse (e.g. a
+    transient Google Sheets fetch hiccup during the scheduled background
+    refresh) used to unconditionally overwrite STATE['loader'] — including
+    with an empty/error'd loader — which blanked out every tab on the live
+    site until the next successful sync. Now a bad attempt only replaces
+    the previous good data if there WAS no previous good data yet; either
+    way the returned loader still reflects exactly what this attempt did,
+    so admin-panel messages (which read the returned object directly, not
+    STATE) are unaffected."""
     ensure_gis_loaded()
     loader = de.DataLoader(path)
     loader.load()
-    STATE["loader"] = loader
-    STATE["error"] = loader.error
-    STATE["source_label"] = label
+    got_data = bool(loader.records) and not loader.error
+    had_data_before = STATE.get("loader") is not None and bool(STATE["loader"].records)
+    if got_data or not had_data_before:
+        STATE["loader"] = loader
+        STATE["error"] = loader.error
+        STATE["source_label"] = label
+    else:
+        STATE["error"] = ((loader.error or "This sync returned 0 records.") +
+                           " Previously loaded data is still being served.")
     return loader
 
 
@@ -158,7 +319,13 @@ def load_gis_from_drive(url_or_id):
     """Fast path for the GIS district/province package: pull the zip
     directly from a Google Drive share link instead of an admin file
     upload. Lets the admin update the boundary package by just replacing
-    the file in Drive — no redeploy, no re-upload through the browser."""
+    the file in Drive — no redeploy, no re-upload through the browser.
+    NOTE: this is the synchronous variant, kept for bootstrap_on_startup()
+    and the background-refresh timer, where blocking briefly is fine
+    since no HTTP request is waiting on it. The admin panel's own
+    "Sync now" button should call start_gis_reload_async() after this
+    download step instead of relying on this function's blocking parse —
+    see admin.py's sync_gis_drive route."""
     _, changed = de.download_google_drive_file(url_or_id, GIS_ZIP_PATH)
     ensure_gis_loaded(force=True)
     _save_config(gis_drive_url=url_or_id, last_gis_sync=_now_str())
@@ -177,6 +344,55 @@ def load_pa_from_drive(url_or_id):
     return changed
 
 
+def start_gis_drive_sync_async(url_or_id):
+    """Fully-async Drive sync for the admin panel's 'Sync now' button: the
+    download AND the parse both run in the background thread, so the HTTP
+    request returns immediately. The previous version downloaded inline
+    (up to ~90-180s for a large zip needing Drive's virus-scan-confirm
+    round trip) before handing off to the async parser — that download
+    alone could exceed gunicorn's --timeout, SIGKILL the single worker,
+    and 502 the whole site including the admin panel it was needed to
+    reach. Now nothing about this sync can block a request thread."""
+
+    def _do():
+        de.download_google_drive_file(url_or_id, GIS_ZIP_PATH)
+        candidate = copy.copy(de.GIS)
+        _check_zip_size(GIS_ZIP_PATH, "GIS package")
+        ok = candidate.load_from_path(GIS_ZIP_PATH)
+        if not ok:
+            raise RuntimeError(candidate.error or "Loader returned no data.")
+        de.GIS = candidate
+        STATE["gis_loaded"] = True
+        STATE["gis_load_error"] = None
+        _save_config(gis_drive_url=url_or_id, last_gis_sync=_now_str())
+        STATE["gis_drive_url"] = url_or_id
+        STATE["last_gis_sync"] = _now_str()
+        _reparse_current_workbook_if_any()
+
+    _run_async("gis_loading", "gis_load_error", _do)
+
+
+def start_pa_drive_sync_async(url_or_id):
+    """Same as start_gis_drive_sync_async(), for the protected-area package."""
+
+    def _do():
+        de.download_google_drive_file(url_or_id, PA_ZIP_PATH)
+        candidate = copy.copy(de.GIS)
+        _check_zip_size(PA_ZIP_PATH, "Protected-area package")
+        ok = candidate.load_protected_from_path(PA_ZIP_PATH)
+        if not ok:
+            raise RuntimeError("Protected-area loader returned no data.")
+        de.GIS = candidate
+        STATE["pa_loaded"] = True
+        STATE["pa_load_error"] = None
+        _save_config(pa_drive_url=url_or_id, last_pa_sync=_now_str())
+        STATE["pa_drive_url"] = url_or_id
+        STATE["last_pa_sync"] = _now_str()
+        _reparse_current_workbook_if_any()
+
+    _run_async("pa_loading", "pa_load_error", _do)
+
+
 def reload_cached_on_startup():
     """Superseded by bootstrap_on_startup() below — kept as a thin alias
     so nothing that still imports the old name breaks."""
@@ -191,9 +407,9 @@ def bootstrap_on_startup():
     variable set in the Render dashboard. So the durable source of truth
     is three env vars:
 
-        DEFAULT_SHEET_URL       — the Google Sheet to sync from
-        DEFAULT_GIS_DRIVE_URL   — the GIS district/province zip's Drive link
-        DEFAULT_PA_DRIVE_URL    — the protected-area zip's Drive link (optional)
+        DEFAULT_SHEET_URL     — the Google Sheet to sync from
+        DEFAULT_GIS_DRIVE_URL — the GIS district/province zip's Drive link
+        DEFAULT_PA_DRIVE_URL  — the protected-area zip's Drive link (optional)
 
     Set these once in Render -> Environment. Every time the process starts
     (including after a redeploy that wiped the disk) it re-fetches fresh
@@ -221,7 +437,9 @@ def bootstrap_on_startup():
     # with an empty district/province whenever GIS hadn't finished loading
     # yet, and that emptiness was then permanent for the rest of the
     # process's life (see record_local()'s memoization) until the next
-    # manual re-sync. Fetch GIS/PA first, workbook/sheet last.
+    # manual re-sync. Fetch GIS/PA first, workbook/sheet last. Startup is
+    # the one place blocking briefly is acceptable, so this uses the
+    # synchronous loaders, not the async ones.
     if gis_url:
         try:
             load_gis_from_drive(gis_url)
@@ -260,7 +478,6 @@ def start_background_refresh():
     process itself never restarts. Defaults to every 6 hours — override
     with the AUTO_REFRESH_HOURS env var. Safe to call once per worker
     process at import time; each timer re-schedules itself."""
-    import threading
 
     def _tick():
         try:
@@ -288,6 +505,7 @@ def start_background_refresh():
 
 def _now_str():
     import datetime
+
     return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
 
