@@ -807,6 +807,14 @@ STAGE_SHORT = {
     "Operating": "Operation",
 }
 
+# Overview tab's type-flip card lists/charts the most-advanced stage first
+# (Operating -> Construction License -> Appl. for Construction -> Survey
+# License -> Appl. for Survey), the reverse of the pipeline order used
+# everywhere else (STATUS_ORDER runs earliest-stage-first, which is right
+# for a funnel chart but reads backwards for "what's already built vs.
+# what's still in the pipeline" at a glance).
+FLIP_CARD_STAGE_ORDER = list(reversed(de.STATUS_ORDER))
+
 
 _PLACEHOLDER_WORDS = ("load", "tbd", "n/a", "na", "pending", "update", "unknown",
                       "unspecified", "-", "—", "n.a", "to be")
@@ -1017,11 +1025,17 @@ def render_ticker_bar(loader, recs=None):
     ], className="ticker-bar")
 
 
-def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color):
+def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color, total_km=0.0,
+                          stage_order=None):
     """One category card (used for both project-type and province cards):
     an optional uploaded background photo (falls back to a flat colour
     swatch), the category name, its totals, and a compact per-stage
-    breakdown (count + MW) underneath."""
+    breakdown (count + MW, plus circuit length in km when relevant —
+    i.e. Transmission Line) underneath. stage_order lets a caller show
+    stages in a different sequence than the default pipeline order (e.g.
+    the Overview flip card lists most-advanced-first) without affecting
+    other callers that still want the natural funnel order."""
+    stage_order = stage_order or de.STATUS_ORDER
     header_style = {
         "borderRadius": "8px 8px 0 0",
         "padding": "14px 16px",
@@ -1042,20 +1056,21 @@ def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color
         header_style["backgroundColor"] = base_color
 
     stage_rows = []
-    for st in de.STATUS_ORDER:
+    for st in stage_order:
         if st not in stage_map:
             continue
-        n, mw = stage_map[st]
+        n, mw, km = stage_map[st]
+        detail = f"{n:,} · {mw:,.1f} MW" + (f" · {km:,.1f} km" if km else "")
         stage_rows.append(html.Div([
             html.Span(STAGE_SHORT.get(st, st), className="small text-muted"),
-            html.Span(f"{n:,} · {mw:,.1f} MW", className="small fw-semibold float-end"),
+            html.Span(detail, className="small fw-semibold float-end"),
         ], className="d-flex justify-content-between border-bottom py-1"))
 
+    totals_line = f"{total_n:,} projects · {total_mw:,.1f} MW" + (f" · {total_km:,.1f} km" if total_km else "")
     return dbc.Card([
         html.Div([
             html.Div(label, className="fw-bold", style={"fontSize": "15px"}),
-            html.Div(f"{total_n:,} projects · {total_mw:,.1f} MW", className="small",
-                      style={"opacity": 0.9}),
+            html.Div(totals_line, className="small", style={"opacity": 0.9}),
         ], style=header_style),
         dbc.CardBody(stage_rows or [html.Div("No records", className="small text-muted")],
                      style={"padding": "8px 16px", "overflowY": "auto"}),
@@ -1064,17 +1079,23 @@ def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color
 
 
 def compute_breakdown(recs, key_field):
-    """Returns (ordered keys, totals dict[key] -> [count, mw],
-    stage dict[key][status] -> [count, mw])."""
-    totals = defaultdict(lambda: [0, 0.0])
+    """Returns (ordered keys, totals dict[key] -> [count, mw, km],
+    stage dict[key][status] -> [count, mw, km]). km is only ever
+    non-zero for Transmission Line records (line_length_km), carried
+    alongside count/MW so any card/chart built from this can show
+    circuit length for that type without a separate computation."""
+    totals = defaultdict(lambda: [0, 0.0, 0.0])
     stages = defaultdict(dict)
     for r in recs:
         k = r[key_field] or "Unspecified"
+        km = r["line_length_km"] or 0.0
         totals[k][0] += 1
         totals[k][1] += r["capacity_mw"] or 0.0
-        entry = stages[k].setdefault(r["status"], [0, 0.0])
+        totals[k][2] += km
+        entry = stages[k].setdefault(r["status"], [0, 0.0, 0.0])
         entry[0] += 1
         entry[1] += r["capacity_mw"] or 0.0
+        entry[2] += km
     return totals, stages
 
 
@@ -1131,18 +1152,40 @@ def render_overview(loader, recs):
     return html.Div([top_row, html.Hr(), sub_tabs])
 
 
-def type_flip_chart_figure(t, stage_map):
+def type_flip_chart_figure(t, stage_map, bg_url=None):
     """Small paired chart that flips in sync with the type-flip-card:
-    the license-stage capacity breakdown for whichever type is currently
-    shown on the card."""
-    stages_present = [s for s in de.STATUS_ORDER if s in stage_map]
+    the license-stage breakdown for whichever type is currently shown on
+    the card — capacity (MW) for power-plant types, circuit length (km)
+    for Transmission Line, since MW is frequently blank/irrelevant there.
+    Stages read most-advanced-first (FLIP_CARD_STAGE_ORDER), matching the
+    card on the left. When the type has an admin-uploaded background
+    photo, the same image spans the full width of the chart behind the
+    bars (dimmed, so the bars/labels stay readable) instead of only
+    appearing on the card."""
+    stages_present = [s for s in FLIP_CARD_STAGE_ORDER if s in stage_map]
+    use_km = (t == "Transmission Line")
+    idx = 2 if use_km else 1
+    unit = "km" if use_km else "MW"
     fig = go.Figure(go.Bar(
-        x=stages_present, y=[stage_map[s][1] for s in stages_present],
+        x=stages_present, y=[stage_map[s][idx] for s in stages_present],
         marker_color=[STATUS_COLOR_MAP.get(s, "#90a4ae") for s in stages_present],
-        text=[f"{stage_map[s][1]:,.1f} MW" for s in stages_present], textposition="outside",
+        text=[f"{stage_map[s][idx]:,.1f} {unit}" for s in stages_present], textposition="outside",
     ))
-    fig.update_layout(title=f"{t} — Capacity (MW) by License Stage", height=360,
-                       yaxis_title="MW", margin=dict(l=10, r=10, t=40, b=10))
+    layout_kwargs = dict(
+        title=f"{t} — {'Length (km)' if use_km else 'Capacity (MW)'} by License Stage",
+        height=360, yaxis_title=unit, margin=dict(l=10, r=10, t=40, b=10),
+    )
+    if bg_url:
+        layout_kwargs["images"] = [dict(
+            source=bg_url, xref="paper", yref="paper",
+            x=0, y=1, sizex=1, sizey=1, xanchor="left", yanchor="top",
+            sizing="stretch", opacity=0.30, layer="below",
+        )]
+        # Translucent plot background so the image reads behind the bars
+        # left-to-right across the whole chart, not just a strip.
+        layout_kwargs["plot_bgcolor"] = "rgba(255,255,255,0.72)"
+        layout_kwargs["paper_bgcolor"] = "rgba(0,0,0,0)"
+    fig.update_layout(**layout_kwargs)
     return fig
 
 
@@ -1175,9 +1218,11 @@ def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_year, f_search
     if not types:
         return None, empty_fig
     t = types[n % len(types)]
+    bg_url = ss.get_type_bg_url(t)
     card = render_category_card(t, stages[t], totals[t][0], totals[t][1],
-                                 ss.get_type_bg_url(t), TYPE_COLOR_MAP.get(t, "#607d8b"))
-    return card, type_flip_chart_figure(t, stages[t])
+                                 bg_url, TYPE_COLOR_MAP.get(t, "#607d8b"),
+                                 total_km=totals[t][2], stage_order=FLIP_CARD_STAGE_ORDER)
+    return card, type_flip_chart_figure(t, stages[t], bg_url=bg_url)
 
 
 def render_plants_tab(loader, recs):
