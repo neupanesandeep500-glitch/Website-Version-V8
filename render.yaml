@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: nepal-power-license-dashboard
+    runtime: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:server --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      # Set these three in the Render dashboard (Environment tab) so the
+      # dashboard self-heals on every redeploy instead of coming up blank —
+      # see server_state.py's bootstrap_on_startup() docstring.
+      - key: DEFAULT_SHEET_URL
+        sync: false
+      - key: DEFAULT_GIS_DRIVE_URL
+        sync: false
+      - key: DEFAULT_PA_DRIVE_URL
+        sync: false
+      - key: AUTO_REFRESH_HOURS
+        value: "6"
+      # REQUIRED for /admin/login to work at all — without ADMIN_PASSWORD_HASH
+      # set, the login page returns "not configured" instead of a form (it
+      # fails closed on purpose, never open). Generate the hash locally with:
+      #   python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your-password-here'))"
+      # then paste the output (starts with "scrypt:" or "pbkdf2:") as the
+      # ADMIN_PASSWORD_HASH value in Render's Environment tab.
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      # Without this, login sessions reset on every worker restart (you'd
+      # get logged out unexpectedly, though login itself would still work).
+      - key: FLASK_SECRET_KEY
+        generateValue: true

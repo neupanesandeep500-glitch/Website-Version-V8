@@ -1,0 +1,31 @@
+/* Live KPI ticker (marquee) — news-style scrolling strip on the Overview
+   header, matching the desktop app's canvas-based ticker but done with a
+   pure CSS animation so it needs no extra JS dependency. */
+
+.ticker-bar {
+  overflow: hidden;
+  background: #101726;
+  padding: 8px 0;
+  border-radius: 6px;
+  margin-bottom: 14px;
+  white-space: nowrap;
+}
+
+.ticker-track {
+  display: inline-block;
+  white-space: nowrap;
+  padding-left: 100%;
+  animation: ticker-scroll 240s linear infinite;
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.ticker-bar:hover .ticker-track {
+  animation-play-state: paused;
+}
+
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
