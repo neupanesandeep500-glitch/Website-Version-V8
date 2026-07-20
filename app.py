@@ -340,6 +340,19 @@ CAPACITY_BIN_RANGES = {
     "gt100": (100, None),
 }
 
+TX_LENGTH_BIN_OPTIONS = [
+    {"label": "All lengths", "value": "all"},
+    {"label": "Short — up to 80 km", "value": "short"},
+    {"label": "Medium — 80–200 km", "value": "medium"},
+    {"label": "Long — above 200 km", "value": "long"},
+]
+TX_LENGTH_BIN_RANGES = {
+    "all": (None, None),
+    "short": (None, 80),
+    "medium": (80, 200),
+    "long": (200, None),
+}
+
 
 def kpi_card(title, value, sub, color):
     return dbc.Card(
@@ -393,6 +406,17 @@ def sidebar():
                         clearable=False,
                         placeholder="All capacities",
                     ),
+                    html.Label("Transmission Line Length", className="fw-semibold small mt-2"),
+                    dcc.Dropdown(
+                        id="f-tx-length",
+                        options=TX_LENGTH_BIN_OPTIONS,
+                        value="all",
+                        clearable=False,
+                        placeholder="All lengths",
+                    ),
+                    html.Div("↳ only narrows Transmission Line records — every "
+                             "other type is unaffected", className="text-muted",
+                              style={"fontSize": "11px", "marginLeft": "8px"}),
                 ], item_id="grp-project"),
 
                 dbc.AccordionItem(title="📅 Dates — License Issue / COD", children=[
@@ -579,9 +603,20 @@ def handle_data_source(_init, _poll):
                else "No data loaded yet. An administrator can add a data source via /admin.")
         return (msg, [], [], [], [2050, 2085], footer_update)
 
-    types = [{"label": t, "value": t} for t in loader.get_types()]
+    # Transmission Line gets its own dedicated tab and is never mixed into
+    # Power Plants — offering it as a *global* Type filter choice meant
+    # picking it while on the Power Plants tab always produced "no records
+    # match" (that tab excludes Transmission Line unconditionally), which
+    # just looked broken. Dropped from the picklist; the Transmission Line
+    # tab itself still shows every transmission record regardless, since it
+    # selects them directly rather than going through this filter.
+    types = [{"label": t, "value": t} for t in loader.get_types() if t != "Transmission Line"]
     statuses = [{"label": s, "value": s} for s in loader.get_statuses()]
-    provinces = [{"label": p, "value": p} for p in loader.get_provinces()]
+    # "Unspecified" means the source data didn't say — not a real province a
+    # user would ever filter down to, so it's excluded from the picklist.
+    # Records missing a province are still counted everywhere else (KPIs,
+    # charts) exactly as before; this only trims the dropdown.
+    provinces = [{"label": p, "value": p} for p in loader.get_provinces() if p != "Unspecified"]
     y_lo, y_hi = loader.get_license_year_bounds()
     y_lo, y_hi = (y_lo or 2050), (y_hi or 2085)
 
@@ -594,7 +629,8 @@ def handle_data_source(_init, _poll):
 #  FILTERING HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                          f_date_from=None, f_date_to=None, f_cod_from=None, f_cod_to=None):
+                          f_date_from=None, f_date_to=None, f_cod_from=None, f_cod_to=None,
+                          f_tx_length=None):
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
         return []
@@ -606,12 +642,15 @@ def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_sea
     cod_from = de.parse_bs_input(f_cod_from) if f_cod_from else None
     cod_to = de.parse_bs_input(f_cod_to, end=True) if f_cod_to else None
     cap_min, cap_max = CAPACITY_BIN_RANGES.get(f_capacity or "all", (None, None))
+    km_min, km_max = TX_LENGTH_BIN_RANGES.get(f_tx_length or "all", (None, None))
     return loader.filter(
         types=f_type or None,
         statuses=f_status or None,
         provinces=f_province or None,
         cap_min=cap_min,
         cap_max=cap_max,
+        km_min=km_min,
+        km_max=km_max,
         year_from=date_from,
         year_to=date_to,
         cod_from=cod_from,
@@ -626,15 +665,16 @@ def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_sea
 @app.callback(
     Output("kpi-row", "children"),
     Input("f-type", "value"), Input("f-status", "value"), Input("f-province", "value"),
-    Input("f-capacity", "value"), Input("f-year", "data"), Input("f-search", "value"),
+    Input("f-capacity", "value"), Input("f-tx-length", "value"), Input("f-year", "data"),
+    Input("f-search", "value"),
     Input("f-date-from", "value"), Input("f-date-to", "value"),
     Input("f-cod-from", "value"), Input("f-cod-to", "value"),
     Input("load-status", "children"),
 )
-def update_kpis(f_type, f_status, f_province, f_capacity, f_year, f_search,
+def update_kpis(f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
                  f_date_from, f_date_to, f_cod_from, f_cod_to, _status):
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
 
     # "Active" pipeline records only — Cancelled / GoN Study Project /
     # Technical Clearance are a different bucket entirely (they never had,
@@ -698,11 +738,12 @@ def update_hero(_a, _b):
     Input("load-status", "children"),
     Input("refresh-poll", "n_intervals"),
     Input("f-type", "value"), Input("f-status", "value"), Input("f-province", "value"),
-    Input("f-capacity", "value"), Input("f-year", "data"), Input("f-search", "value"),
+    Input("f-capacity", "value"), Input("f-tx-length", "value"), Input("f-year", "data"),
+    Input("f-search", "value"),
     Input("f-date-from", "value"), Input("f-date-to", "value"),
     Input("f-cod-from", "value"), Input("f-cod-to", "value"),
 )
-def update_ticker(_status, _poll, f_type, f_status, f_province, f_capacity, f_year, f_search,
+def update_ticker(_status, _poll, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
                    f_date_from, f_date_to, f_cod_from, f_cod_to):
     if not ss.get_marquee_enabled():
         return None
@@ -710,7 +751,7 @@ def update_ticker(_status, _poll, f_type, f_status, f_province, f_capacity, f_ye
     if loader is None or loader.error or not loader.records:
         return render_ticker_bar(loader)
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
     return render_ticker_bar(loader, recs)
 
 
@@ -721,13 +762,14 @@ def update_ticker(_status, _poll, f_type, f_status, f_province, f_capacity, f_ye
     Output("tab-content", "children"),
     Input("main-tabs", "active_tab"),
     Input("f-type", "value"), Input("f-status", "value"), Input("f-province", "value"),
-    Input("f-capacity", "value"), Input("f-year", "data"), Input("f-search", "value"),
+    Input("f-capacity", "value"), Input("f-tx-length", "value"), Input("f-year", "data"),
+    Input("f-search", "value"),
     Input("f-date-from", "value"), Input("f-date-to", "value"),
     Input("f-cod-from", "value"), Input("f-cod-to", "value"),
     Input("f-crs", "value"),
     Input("gis-opt-layers", "value"),
 )
-def render_tab(tab, f_type, f_status, f_province, f_capacity, f_year, f_search,
+def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
                f_date_from, f_date_to, f_cod_from, f_cod_to, f_crs, gis_layers):
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
@@ -747,7 +789,7 @@ def render_tab(tab, f_type, f_status, f_province, f_capacity, f_year, f_search,
         ], color="info", className="mt-3")
 
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
     if not recs:
         return dbc.Alert("No projects match the current filters.", color="warning")
 
@@ -1194,11 +1236,12 @@ def type_flip_chart_figure(t, stage_map, bg_url=None):
     Output("type-flip-chart", "figure"),
     Input("type-flip-interval", "n_intervals"),
     State("f-type", "value"), State("f-status", "value"), State("f-province", "value"),
-    State("f-capacity", "value"), State("f-year", "data"), State("f-search", "value"),
+    State("f-capacity", "value"), State("f-tx-length", "value"), State("f-year", "data"),
+    State("f-search", "value"),
     State("f-date-from", "value"), State("f-date-to", "value"),
     State("f-cod-from", "value"), State("f-cod-to", "value"),
 )
-def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_year, f_search,
+def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
                     f_date_from, f_date_to, f_cod_from, f_cod_to):
     """Cycles through one project-type card at a time on the Overview tab
     (standard-sized background image + stage detail) with its paired
@@ -1209,7 +1252,7 @@ def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_year, f_search
     if loader is None or loader.error or not loader.records:
         return None, empty_fig
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
     if not recs:
         return None, empty_fig
     totals, stages = compute_breakdown(recs, "type")
@@ -1702,18 +1745,19 @@ def render_table(recs, f_crs=None):
     Output("download-pdf", "data"),
     Input("btn-pdf", "n_clicks"),
     State("f-type", "value"), State("f-status", "value"), State("f-province", "value"),
-    State("f-capacity", "value"), State("f-year", "data"), State("f-search", "value"),
+    State("f-capacity", "value"), State("f-tx-length", "value"), State("f-year", "data"),
+    State("f-search", "value"),
     State("f-date-from", "value"), State("f-date-to", "value"),
     State("f-cod-from", "value"), State("f-cod-to", "value"),
     prevent_initial_call=True,
 )
-def download_pdf(n_clicks, f_type, f_status, f_province, f_capacity, f_year, f_search,
+def download_pdf(n_clicks, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
                   f_date_from, f_date_to, f_cod_from, f_cod_to):
     loader = STATE["loader"]
     if loader is None or not loader.records:
         return None
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
 
     import matplotlib
     matplotlib.use("Agg")
