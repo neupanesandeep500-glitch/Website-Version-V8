@@ -2897,7 +2897,7 @@ class DataLoader:
     def filter(self, types=None, statuses=None, cap_min=None, cap_max=None,
                year_from=None, year_to=None, voltages=None, search=None,
                provinces=None, districts=None, cod_from=None, cod_to=None,
-               substages=None, locals_sel=None):
+               substages=None, locals_sel=None, km_min=None, km_max=None):
         out = []
         for r in self.records:
             if types and r['type'] not in types: continue
@@ -2906,6 +2906,13 @@ class DataLoader:
             if substages and r.get('substage') not in substages: continue
             if cap_min is not None and (r['capacity_mw'] is None or r['capacity_mw'] < cap_min): continue
             if cap_max is not None and (r['capacity_mw'] is None or r['capacity_mw'] >= cap_max): continue
+            # Circuit-length bucket (Short/Medium/Long) — only meaningful
+            # for Transmission Line records, so it never filters out
+            # Power Plants/GoN/Cancelled rows regardless of its value.
+            if (km_min is not None or km_max is not None) and r['type'] == 'Transmission Line':
+                km = r.get('line_length_km')
+                if km_min is not None and (km is None or km < km_min): continue
+                if km_max is not None and (km is None or km >= km_max): continue
             if voltages and r['voltage_kv'] not in voltages: continue
             if provinces and r['province'] not in provinces: continue
             if districts and (r['district'] or "Unspecified") not in districts: continue
