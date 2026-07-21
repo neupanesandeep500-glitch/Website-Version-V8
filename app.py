@@ -1194,16 +1194,30 @@ def render_ticker_bar(loader, recs=None):
     ], className="ticker-bar")
 
 
+def _fallback_card_bg(base_color):
+    """A textured two-tone gradient used behind any type/province/stage
+    card that doesn't have an admin-uploaded photo yet — richer than a
+    flat colour fill while still clearly a placeholder, not pretending
+    to be a real photo. Upload an actual image for that category in
+    /admin to replace this."""
+    return (
+        f"linear-gradient(135deg, {base_color} 0%, {base_color}cc 55%, #10131a 130%), "
+        "repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 2px, "
+        "transparent 2px, transparent 14px)"
+    )
+
+
 def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color, total_km=0.0,
                           stage_order=None):
     """One category card (used for both project-type and province cards):
-    an optional uploaded background photo (falls back to a flat colour
-    swatch), the category name, its totals, and a compact per-stage
-    breakdown (count + MW, plus circuit length in km when relevant —
-    i.e. Transmission Line) underneath. stage_order lets a caller show
-    stages in a different sequence than the default pipeline order (e.g.
-    the Overview flip card lists most-advanced-first) without affecting
-    other callers that still want the natural funnel order."""
+    an optional uploaded background photo (falls back to a textured
+    gradient in the category's colour, not a flat swatch), the category
+    name, its totals, and a compact per-stage breakdown (count + MW,
+    plus circuit length in km when relevant — i.e. Transmission Line)
+    underneath. stage_order lets a caller show stages in a different
+    sequence than the default pipeline order (e.g. the Overview flip
+    card lists most-advanced-first) without affecting other callers
+    that still want the natural funnel order."""
     stage_order = stage_order or de.STATUS_ORDER
     header_style = {
         "borderRadius": "8px 8px 0 0",
@@ -1222,7 +1236,8 @@ def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color
             "backgroundPosition": "center",
         })
     else:
-        header_style["backgroundColor"] = base_color
+        header_style["backgroundImage"] = _fallback_card_bg(base_color)
+        header_style["backgroundSize"] = "cover, 20px 20px"
 
     stage_rows = []
     for st in stage_order:
@@ -1424,7 +1439,8 @@ def render_single_stage_card(stage, sel_recs, bg_url, base_color, is_transmissio
             "backgroundSize": "cover", "backgroundPosition": "center",
         })
     else:
-        header_style["backgroundColor"] = base_color
+        header_style["backgroundImage"] = _fallback_card_bg(base_color)
+        header_style["backgroundSize"] = "cover, 20px 20px"
 
     rows = [html.Div([
         html.Span(p, className="small text-muted"),
