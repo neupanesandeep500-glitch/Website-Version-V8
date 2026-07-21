@@ -378,6 +378,34 @@ PANEL_TEMPLATE = BASE_STYLE + """
     {% endfor %}
   </div>
 
+  <div class="card">
+    <h2>10. License-stage background images (Power Plants / Transmission Line tabs)</h2>
+    <p class="status">Optional photo shown behind the rotating stage card on the
+      Power Plants and Transmission Line tabs (Survey License, Construction
+      License, Operating, etc.), which cycle through every stage automatically.
+      Falls back to a plain colour card if none is uploaded for a stage.</p>
+    {% for s in license_stages %}
+    <div class="upload-row" style="margin-bottom:14px;">
+      <div class="upload-form">
+        <form method="post" action="{{ url_for('admin.upload_status_bg', slug=s.slug) }}"
+              enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>{{ s.name }} {{ "(image set)" if s.has_bg else "(no image yet)" }}</label>
+          <input type="file" name="status_bg" accept=".png,.jpg,.jpeg">
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+      <div class="upload-preview">
+        {% if s.has_bg %}
+        <img src="{{ s.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ s.name }} background">
+        {% else %}
+        <div class="none-yet">No image yet</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
   <p><a class="back" href="/">&larr; Back to dashboard</a></p>
 </div>
 """
@@ -428,6 +456,11 @@ def panel(message=None, ok=True):
          "bg_url": ss.get_province_bg_url(p)}
         for p in de.PROVINCE_ORDER
     ]
+    license_stages = [
+        {"name": s, "slug": ss.slugify_type(s), "has_bg": bool(ss.get_status_bg_path(s)),
+         "bg_url": ss.get_status_bg_url(s)}
+        for s in de.STATUS_ORDER
+    ]
 
     return render_template_string(
         PANEL_TEMPLATE,
@@ -445,6 +478,7 @@ def panel(message=None, ok=True):
         marquee_enabled=ss.get_marquee_enabled(),
         project_types=project_types,
         provinces=provinces,
+        license_stages=license_stages,
         message=message, ok=ok,
         csrf_token=_csrf_token(),
         gs_url=None,
@@ -638,3 +672,18 @@ def upload_province_bg(slug):
     file.save(os.path.join(ss.ASSETS_DIR, filename))
     ss.set_province_bg(province_name, filename)
     return panel(message=f"Background uploaded for {province_name}.", ok=True)
+
+
+@admin_bp.route("/upload-status-bg/<slug>", methods=["POST"])
+@login_required
+def upload_status_bg(slug):
+    _check_csrf()
+    status_name = next((s for s in de.STATUS_ORDER if ss.slugify_type(s) == slug), slug)
+    file = request.files.get("status_bg")
+    if not file or not file.filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        return panel(message="Please choose a PNG or JPG file.", ok=False)
+    ext = os.path.splitext(secure_filename(file.filename))[1].lower()
+    filename = f"statusbg_{slug}{ext}"
+    file.save(os.path.join(ss.ASSETS_DIR, filename))
+    ss.set_status_bg(status_name, filename)
+    return panel(message=f"Background uploaded for {status_name}.", ok=True)
