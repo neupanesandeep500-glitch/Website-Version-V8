@@ -717,17 +717,27 @@ def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_sea
 def update_district_options(f_province, _status):
     """District dropdown always shows districts actually present in the
     loaded data; once one or more provinces are selected, it narrows to
-    only that province's districts (via the GIS layer's district->province
-    mapping) — the first link of the Province -> District -> Local Body
-    filter tree."""
+    only that province's districts — the first link of the Province ->
+    District -> Local Body filter tree. Built from each record's OWN
+    already-resolved `province` field (set at ingestion via GIS
+    coordinates when available, else via district/address-text
+    resolution) rather than requiring the GIS shapefile package to be
+    loaded — so the cascade narrows correctly even before an admin has
+    uploaded the GIS package, using whatever province each row already
+    resolved to."""
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
         return []
-    all_districts = [d for d in loader.get_districts() if d != "Unspecified"]
-    if not f_province or not de.GIS.loaded:
+    dist_prov = {}
+    for r in loader.records:
+        d = r.get("district")
+        if d and d != "Unspecified" and d not in dist_prov:
+            dist_prov[d] = r.get("province")
+    all_districts = sorted(dist_prov)
+    if not f_province:
         opts = all_districts
     else:
-        opts = [d for d in all_districts if de.GIS.district_province.get(d) in f_province]
+        opts = [d for d in all_districts if dist_prov.get(d) in f_province]
     return [{"label": d, "value": d} for d in opts]
 
 
