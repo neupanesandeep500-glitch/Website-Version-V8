@@ -1631,8 +1631,35 @@ def render_plants_tab(loader, recs):
         dbc.Col(dcc.Graph(figure=fig_prov), md=7),
     ])
 
+    # ── By Project Type: EVERY power-plant type gets its own card (own
+    # background image via the same admin-uploadable type_bg mechanism
+    # already used on the Overview tab, falling back to the textured
+    # colour gradient) plus a matching comparison chart — so Hydro
+    # (>1MW), Hydro (<=1MW), Solar, Wind, Co-generation, Thermal, Biomass
+    # and Other are all visible at once, not just cycling through a
+    # carousel. ──
+    type_totals, type_stages = compute_breakdown(plant_recs, "type")
+    types_present = [t for t in de.TYPE_ORDER if t in type_totals and t != "Transmission Line"]
+    type_cards = [
+        render_category_card(t, type_stages[t], type_totals[t][0], type_totals[t][1],
+                              ss.get_type_bg_url(t), TYPE_COLOR_MAP.get(t, "#607d8b"))
+        for t in types_present
+    ]
+    fig_type = go.Figure(go.Bar(
+        x=types_present, y=[type_totals[t][1] for t in types_present],
+        marker_color=[TYPE_COLOR_MAP.get(t, "#607d8b") for t in types_present],
+        text=[f"{type_totals[t][1]:,.0f} MW" for t in types_present], textposition="outside",
+    ))
+    fig_type.update_layout(title="Power Plant Capacity by Project Type", height=460,
+                            yaxis_title="Capacity (MW)", margin=dict(l=10, r=10, t=40, b=10))
+    type_section = dbc.Row([
+        dbc.Col(type_cards, md=5),
+        dbc.Col(dcc.Graph(figure=fig_type), md=7),
+    ])
+
     return dbc.Tabs([
         dbc.Tab(stage_section, label="License Stage", tab_style={"marginTop": "10px"}),
+        dbc.Tab(type_section, label="By Project Type", tab_style={"marginTop": "10px"}),
         dbc.Tab(prov_section, label="By Province", tab_style={"marginTop": "10px"}),
     ])
 
