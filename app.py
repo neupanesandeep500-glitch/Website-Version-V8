@@ -150,6 +150,23 @@ TICKER_CSS = """
   font-weight: 700;
   font-family: Consolas, "Courier New", monospace;
 }
+.site-header {
+  position: relative;
+  overflow: hidden;
+}
+.site-header-title {
+  font-weight: 800;
+  font-size: 20px;
+  line-height: 1.2;
+}
+.site-header-subtitle {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.site-header-flag, .site-header-logo {
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.25);
+}
 footer.site-footer {
   background: #0b1730;
   color: #b7c4e0;
@@ -292,6 +309,18 @@ def serve_type_bg(slug):
     return send_file(path)
 
 
+@server.route("/assets-status-bg/<slug>")
+def serve_status_bg(slug):
+    from flask import send_file
+    fn = (ss.STATE.get("status_bg") or {}).get(slug)
+    if not fn:
+        return "No background uploaded for this license stage.", 404
+    path = os.path.join(ss.ASSETS_DIR, fn)
+    if not os.path.exists(path):
+        return "No background uploaded for this license stage.", 404
+    return send_file(path)
+
+
 @server.route("/assets-province-bg/<slug>")
 def serve_province_bg(slug):
     from flask import send_file
@@ -376,6 +405,13 @@ def sidebar():
                     dcc.Dropdown(id="f-province", multi=True, placeholder="All provinces"),
                     html.Div("↳ narrows the District list below", className="text-muted",
                               style={"fontSize": "11px", "marginLeft": "8px"}),
+                    html.Label("District", className="fw-semibold small mt-2"),
+                    dcc.Dropdown(id="f-district", multi=True, placeholder="All districts"),
+                    html.Div("↳ narrows the Local Body list below", className="text-muted",
+                              style={"fontSize": "11px", "marginLeft": "8px"}),
+                    html.Label("Local Body (Gaunpalika / Nagarpalika)",
+                                className="fw-semibold small mt-2"),
+                    dcc.Dropdown(id="f-local", multi=True, placeholder="All local bodies"),
                     html.Label("Coordinate System (GIS Map / Data Table)",
                                 className="fw-semibold small mt-2"),
                     dcc.RadioItems(
@@ -502,49 +538,58 @@ def settings_panel():
 
 app.layout = dbc.Container(fluid=True, children=[
     dcc.Store(id="filtered-data-signal"),
-    dbc.NavbarSimple(
-        brand=html.Span([
-            # Nepal flag — served from /assets-flag: an admin-uploaded
-            # replacement if one exists, else the bundled default. Always
-            # the leftmost element, before the admin-uploadable org logo
-            # and before the title text.
-            html.Img(src="/assets-flag", height="32px",
-                     alt="Flag of Nepal", title="Nepal",
-                     className="me-2", style={"verticalAlign": "middle"}),
-            html.Img(src="/assets-logo", height="28px", className="me-2",
-                     alt="Organisation logo", style={"verticalAlign": "middle"})
-            if ss.get_logo_path() else None,
-            html.Span("Nepal Power Plant & Transmission Line License Status Dashboard",
-                      style={"verticalAlign": "middle"}),
-        ], style={"display": "flex", "alignItems": "center"}),
-        children=[
-            html.Div([
+
+    # ── ONE merged header: Nepal flag (+ org logo) on the left, the hero
+    # background photo behind the whole bar, and the live date/time clock
+    # on the right — replaces the old two-piece navbar + separate hero
+    # banner (which duplicated the dashboard title in two places).
+    html.Div(id="site-header", className="site-header p-3 mb-3", children=[
+        dbc.Row(align="center", justify="between", className="g-2", children=[
+            dbc.Col(width="auto", children=html.Div([
+                html.Img(src="/assets-flag", height="40px",
+                         alt="Flag of Nepal", title="Nepal",
+                         className="me-2 site-header-flag"),
+                html.Img(src="/assets-logo", height="34px",
+                         alt="Organisation logo", className="me-2 site-header-logo")
+                if ss.get_logo_path() else None,
+                html.Div([
+                    html.Div("Nepal Power Plant & Transmission Line License Status Dashboard",
+                              className="site-header-title"),
+                    html.Div("Department of Electricity Development · Live licensing pipeline overview",
+                              className="site-header-subtitle"),
+                ]),
+            ], className="d-flex align-items-center")),
+            dbc.Col(width="auto", children=html.Div([
                 html.Div(className="live-clock-date"),
                 html.Div(className="live-clock-time"),
-            ], className="live-clock-wrap"),
-        ],
-        color="dark", dark=True, fluid=True, className="mb-3",
-    ),
-    html.Div(id="hero-banner"),
+            ], className="live-clock-wrap")),
+        ]),
+    ]),
+
     html.Div(id="ticker-bar"),
-    dbc.Row([
+
+    # Main tab bar spans the full width, on its own row, BEFORE the
+    # filters/content row below it.
+    dbc.Tabs(id="main-tabs", active_tab="overview", className="main-tabs-nav", children=[
+        dbc.Tab(label="📊 Overview", tab_id="overview"),
+        dbc.Tab(label="⚡ Power Plants", tab_id="plants"),
+        dbc.Tab(label="🔌 Transmission Line", tab_id="transmission"),
+        dbc.Tab(label="📋 GoN Studied Projects", tab_id="gon_study"),
+        dbc.Tab(label="🚫 License Cancelled", tab_id="cancelled"),
+        dbc.Tab(label="📈 Growth Trends", tab_id="growth"),
+        dbc.Tab(label="🗺️ GIS Map", tab_id="gis"),
+        dbc.Tab(label="📉 Comparative Charts", tab_id="compare"),
+        dbc.Tab(label="🗂️ Data Table", tab_id="table"),
+    ]),
+
+    # Only AFTER the main tab row: filter scheme on the left, the active
+    # tab's KPI summary + stage detail (image middle / chart right) on
+    # the right.
+    dbc.Row(className="mt-3", children=[
         dbc.Col(md=3, children=[sidebar(), html.Div(className="mt-3"), settings_panel()]),
         dbc.Col(md=9, children=[
-            # Order requested: marquee (above, outside this column) -> main
-            # tab bar -> filtered summary data -> the selected tab's charts.
-            dbc.Tabs(id="main-tabs", active_tab="overview", className="main-tabs-nav", children=[
-                dbc.Tab(label="📊 Overview", tab_id="overview"),
-                dbc.Tab(label="⚡ Power Plants", tab_id="plants"),
-                dbc.Tab(label="🔌 Transmission Line", tab_id="transmission"),
-                dbc.Tab(label="📋 GoN Studied Projects", tab_id="gon_study"),
-                dbc.Tab(label="🚫 License Cancelled", tab_id="cancelled"),
-                dbc.Tab(label="📈 Growth Trends", tab_id="growth"),
-                dbc.Tab(label="🗺️ GIS Map", tab_id="gis"),
-                dbc.Tab(label="📉 Comparative Charts", tab_id="compare"),
-                dbc.Tab(label="🗂️ Data Table", tab_id="table"),
-            ]),
-            dbc.Row(id="kpi-row", className="g-3 my-3"),
-            html.Div(id="tab-content", className="mt-3"),
+            dbc.Row(id="kpi-row", className="g-3 mb-3"),
+            html.Div(id="tab-content"),
         ]),
     ]),
     html.Div(id="_init_trigger", style={"display": "none"}),
@@ -630,7 +675,7 @@ def handle_data_source(_init, _poll):
 # ─────────────────────────────────────────────────────────────────────────────
 def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
                           f_date_from=None, f_date_to=None, f_cod_from=None, f_cod_to=None,
-                          f_tx_length=None):
+                          f_tx_length=None, f_district=None, f_local=None):
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
         return []
@@ -647,6 +692,8 @@ def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_sea
         types=f_type or None,
         statuses=f_status or None,
         provinces=f_province or None,
+        districts=f_district or None,
+        locals_sel=f_local or None,
         cap_min=cap_min,
         cap_max=cap_max,
         km_min=km_min,
@@ -660,6 +707,53 @@ def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_sea
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  PROVINCE → DISTRICT → LOCAL BODY CASCADING FILTER TREE
+# ─────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("f-district", "options"),
+    Input("f-province", "value"),
+    Input("load-status", "children"),
+)
+def update_district_options(f_province, _status):
+    """District dropdown always shows districts actually present in the
+    loaded data; once one or more provinces are selected, it narrows to
+    only that province's districts (via the GIS layer's district->province
+    mapping) — the first link of the Province -> District -> Local Body
+    filter tree."""
+    loader = STATE["loader"]
+    if loader is None or loader.error or not loader.records:
+        return []
+    all_districts = [d for d in loader.get_districts() if d != "Unspecified"]
+    if not f_province or not de.GIS.loaded:
+        opts = all_districts
+    else:
+        opts = [d for d in all_districts if de.GIS.district_province.get(d) in f_province]
+    return [{"label": d, "value": d} for d in opts]
+
+
+@app.callback(
+    Output("f-local", "options"),
+    Input("f-district", "value"), Input("f-province", "value"),
+    Input("load-status", "children"),
+)
+def update_local_options(f_district, f_province, _status):
+    """Local-body (Gaunpalika/Nagarpalika/etc.) dropdown, the second link
+    of the cascade: narrows to the selected District(s) if any, else to
+    the selected Province(s), else shows every local body known to the
+    GIS package."""
+    if not de.GIS.loaded:
+        return []
+    if f_district:
+        labels = de.GIS.locals_for_districts(f_district)
+    elif f_province:
+        dists = [d for d, p in de.GIS.district_province.items() if p in f_province]
+        labels = de.GIS.locals_for_districts(dists) if dists else []
+    else:
+        labels = sorted({L["label"] for L in de.GIS.locals})
+    return [{"label": l, "value": l} for l in labels]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  KPI ROW
 # ─────────────────────────────────────────────────────────────────────────────
 @app.callback(
@@ -669,12 +763,14 @@ def get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_sea
     Input("f-search", "value"),
     Input("f-date-from", "value"), Input("f-date-to", "value"),
     Input("f-cod-from", "value"), Input("f-cod-to", "value"),
+    Input("f-district", "value"), Input("f-local", "value"),
     Input("load-status", "children"),
 )
 def update_kpis(f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
-                 f_date_from, f_date_to, f_cod_from, f_cod_to, _status):
+                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_district, f_local, _status):
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                 f_district, f_local)
 
     # "Active" pipeline records only — Cancelled / GoN Study Project /
     # Technical Clearance are a different bucket entirely (they never had,
@@ -710,27 +806,27 @@ def update_kpis(f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f
 
 
 @app.callback(
-    Output("hero-banner", "children"), Output("hero-banner", "style"),
+    Output("site-header", "style"),
     Input("init-once", "n_intervals"), Input("refresh-poll", "n_intervals"),
 )
-def update_hero(_a, _b):
+def update_header_bg(_a, _b):
+    """Sets the merged header's background: the admin-uploaded hero photo
+    if one exists, else a flat dark gradient fallback (previously the
+    NavbarSimple's plain dark bar) — the flag/logo/title/clock children
+    are static and never re-rendered here, only the backdrop behind them."""
     bg = ss.get_background_path()
-    if not bg:
-        return None, {"display": "none"}
     style = {
-        "backgroundImage": "linear-gradient(rgba(10,20,40,0.55), rgba(10,20,40,0.55)), "
-                            "url('/assets-background')",
-        "backgroundSize": "cover", "backgroundPosition": "center",
-        "borderRadius": "10px", "padding": "36px 28px", "color": "white",
-        "marginBottom": "18px",
+        "borderRadius": "10px", "color": "white",
     }
-    content = html.Div([
-        html.H2("Nepal Power Plant & Transmission Line License Status",
-                className="fw-bold mb-1"),
-        html.Div("Department of Electricity Development · Live licensing pipeline overview",
-                  className="small"),
-    ])
-    return content, style
+    if bg:
+        style.update({
+            "backgroundImage": "linear-gradient(rgba(10,20,40,0.55), rgba(10,20,40,0.55)), "
+                                "url('/assets-background')",
+            "backgroundSize": "cover", "backgroundPosition": "center",
+        })
+    else:
+        style["background"] = "linear-gradient(135deg, #0b1730 0%, #16325c 100%)"
+    return style
 
 
 @app.callback(
@@ -742,16 +838,18 @@ def update_hero(_a, _b):
     Input("f-search", "value"),
     Input("f-date-from", "value"), Input("f-date-to", "value"),
     Input("f-cod-from", "value"), Input("f-cod-to", "value"),
+    Input("f-district", "value"), Input("f-local", "value"),
 )
 def update_ticker(_status, _poll, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
-                   f_date_from, f_date_to, f_cod_from, f_cod_to):
+                   f_date_from, f_date_to, f_cod_from, f_cod_to, f_district, f_local):
     if not ss.get_marquee_enabled():
         return None
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
         return render_ticker_bar(loader)
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                 f_district, f_local)
     return render_ticker_bar(loader, recs)
 
 
@@ -768,9 +866,11 @@ def update_ticker(_status, _poll, f_type, f_status, f_province, f_capacity, f_tx
     Input("f-cod-from", "value"), Input("f-cod-to", "value"),
     Input("f-crs", "value"),
     Input("gis-opt-layers", "value"),
+    Input("f-district", "value"), Input("f-local", "value"),
 )
 def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
-               f_date_from, f_date_to, f_cod_from, f_cod_to, f_crs, gis_layers):
+               f_date_from, f_date_to, f_cod_from, f_cod_to, f_crs, gis_layers,
+               f_district, f_local):
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
         detail = f" Details: {loader.error}" if (loader and loader.error) else ""
@@ -789,7 +889,8 @@ def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_yea
         ], color="info", className="mt-3")
 
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                 f_district, f_local)
     if not recs:
         return dbc.Alert("No projects match the current filters.", color="warning")
 
@@ -798,30 +899,43 @@ def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_yea
     # up on their own dedicated tabs, per record-keeping request.
     active_recs = [r for r in recs if r["status"] not in de.EXTRA_STATUS_ORDER]
 
-    if tab == "overview":
-        return render_overview(loader, active_recs)
-    if tab == "plants":
-        return render_plants_tab(loader, active_recs)
-    if tab == "transmission":
-        return render_transmission_tab(loader, active_recs)
-    if tab == "gon_study":
-        return render_side_category_tab(loader, recs, "GoN Study Project",
-                                         "GoN Studied Projects")
-    if tab == "cancelled":
-        return render_side_category_tab(loader, recs, "Cancelled",
-                                         "License Cancelled")
-    if tab == "growth":
-        return render_growth(loader, active_recs)
-    if tab == "gis":
-        gis_layers = gis_layers if gis_layers is not None else ["boundary"]
-        return render_gis_tab(loader, active_recs, f_crs or ct.CRS_WGS84,
-                               show_boundary="boundary" in gis_layers,
-                               show_pa="pa" in gis_layers)
-    if tab == "compare":
-        return render_compare(loader, active_recs)
-    if tab == "table":
-        return render_table(recs, f_crs or ct.CRS_WGS84)
-    return html.Div()
+    try:
+        if tab == "overview":
+            return render_overview(loader, active_recs)
+        if tab == "plants":
+            return render_plants_tab(loader, active_recs)
+        if tab == "transmission":
+            return render_transmission_tab(loader, active_recs)
+        if tab == "gon_study":
+            return render_side_category_tab(loader, recs, "GoN Study Project",
+                                             "GoN Studied Projects")
+        if tab == "cancelled":
+            return render_side_category_tab(loader, recs, "Cancelled",
+                                             "License Cancelled")
+        if tab == "growth":
+            return render_growth(loader, active_recs)
+        if tab == "gis":
+            gis_layers = gis_layers if gis_layers is not None else ["boundary"]
+            return render_gis_tab(loader, active_recs, f_crs or ct.CRS_WGS84,
+                                   show_boundary="boundary" in gis_layers,
+                                   show_pa="pa" in gis_layers)
+        if tab == "compare":
+            return render_compare(loader, active_recs)
+        if tab == "table":
+            return render_table(recs, f_crs or ct.CRS_WGS84)
+        return html.Div()
+    except Exception:
+        # A rendering bug in one tab used to leave "tab-content" blank with
+        # no clue why — surface the traceback in-page (and in the server
+        # log) instead, so it's obvious this tab hit an error rather than
+        # "isn't loading" for no reason.
+        tb = traceback.format_exc()
+        traceback.print_exc()
+        return dbc.Alert([
+            html.Div(f"This tab hit an error while rendering: {tab}",
+                      className="fw-semibold"),
+            html.Pre(tb, className="small mt-2", style={"whiteSpace": "pre-wrap"}),
+        ], color="danger", className="mt-3")
 
 
 TYPE_COLOR_MAP = {
@@ -1240,9 +1354,10 @@ def type_flip_chart_figure(t, stage_map, bg_url=None):
     State("f-search", "value"),
     State("f-date-from", "value"), State("f-date-to", "value"),
     State("f-cod-from", "value"), State("f-cod-to", "value"),
+    State("f-district", "value"), State("f-local", "value"),
 )
 def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
-                    f_date_from, f_date_to, f_cod_from, f_cod_to):
+                    f_date_from, f_date_to, f_cod_from, f_cod_to, f_district, f_local):
     """Cycles through one project-type card at a time on the Overview tab
     (standard-sized background image + stage detail) with its paired
     capacity-by-stage chart flipping in the same step, advancing
@@ -1252,7 +1367,8 @@ def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_y
     if loader is None or loader.error or not loader.records:
         return None, empty_fig
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length)
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                 f_district, f_local)
     if not recs:
         return None, empty_fig
     totals, stages = compute_breakdown(recs, "type")
@@ -1266,6 +1382,167 @@ def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_y
                                  bg_url, TYPE_COLOR_MAP.get(t, "#607d8b"),
                                  total_km=totals[t][2], stage_order=FLIP_CARD_STAGE_ORDER)
     return card, type_flip_chart_figure(t, stages[t], bg_url=bg_url)
+
+
+def render_single_stage_card(stage, sel_recs, bg_url, base_color, is_transmission=False):
+    """One rotating stage card: an admin-uploaded 'own image' for that
+    license stage (falls back to a flat colour swatch, same pattern as
+    render_category_card), the stage name, its totals, and a top-5
+    province breakdown underneath — used by the Power Plants / Transmission
+    Line tabs' continuously-cycling stage carousel."""
+    n = len(sel_recs)
+    mw = sum(r["capacity_mw"] or 0 for r in sel_recs)
+    km = sum(r["line_length_km"] or 0 for r in sel_recs) if is_transmission else 0.0
+    prov_totals = defaultdict(lambda: [0, 0.0])
+    for r in sel_recs:
+        p = r["province"] or "Unspecified"
+        prov_totals[p][0] += 1
+        prov_totals[p][1] += r["capacity_mw"] or 0.0
+    top_provs = sorted(prov_totals.items(), key=lambda kv: -kv[1][1])[:5]
+
+    header_style = {
+        "borderRadius": "8px 8px 0 0", "padding": "14px 16px", "color": "#fff",
+        "position": "relative", "height": "180px", "display": "flex",
+        "flexDirection": "column", "justifyContent": "flex-end",
+    }
+    if bg_url:
+        header_style.update({
+            "backgroundImage": f'linear-gradient(rgba(15,20,30,0.55), rgba(15,20,30,0.55)), url("{bg_url}")',
+            "backgroundSize": "cover", "backgroundPosition": "center",
+        })
+    else:
+        header_style["backgroundColor"] = base_color
+
+    rows = [html.Div([
+        html.Span(p, className="small text-muted"),
+        html.Span(f"{v[0]:,} · {v[1]:,.1f} MW", className="small fw-semibold float-end"),
+    ], className="d-flex justify-content-between border-bottom py-1") for p, v in top_provs]
+
+    totals_line = f"{n:,} projects · {mw:,.1f} MW" + (f" · {km:,.1f} km" if km else "")
+    return dbc.Card([
+        html.Div([
+            html.Div(stage, className="fw-bold", style={"fontSize": "15px"}),
+            html.Div(totals_line, className="small", style={"opacity": 0.9}),
+        ], style=header_style),
+        dbc.CardBody(rows or [html.Div("No records for this stage yet", className="small text-muted")],
+                     style={"padding": "8px 16px", "overflowY": "auto"}),
+    ], className="mb-3 shadow-sm", style={"height": "360px", "display": "flex",
+                                            "flexDirection": "column"})
+
+
+def stage_province_chart_figure(stage, sel_recs, is_transmission=False, bg_url=None):
+    """Paired chart for the rotating stage card: that stage's projects
+    broken down by province, flipping in sync with the card on the left."""
+    prov_totals = defaultdict(lambda: [0, 0.0, 0.0])
+    for r in sel_recs:
+        p = r["province"] or "Unspecified"
+        prov_totals[p][0] += 1
+        prov_totals[p][1] += r["capacity_mw"] or 0.0
+        prov_totals[p][2] += r.get("line_length_km") or 0.0
+    provinces_present = [p for p in de.PROVINCE_ORDER if p in prov_totals] + \
+                        [p for p in prov_totals if p not in de.PROVINCE_ORDER]
+    idx = 2 if is_transmission else 1
+    unit = "km" if is_transmission else "MW"
+    yvals = [prov_totals[p][idx] for p in provinces_present]
+    fig = go.Figure(go.Bar(
+        x=provinces_present, y=yvals,
+        marker_color=[PROVINCE_COLOR_MAP.get(p, "#455a64") for p in provinces_present],
+        text=[f"{v:,.1f} {unit}" for v in yvals], textposition="outside",
+    ))
+    layout_kwargs = dict(
+        title=f"{stage} — {'Length (km)' if is_transmission else 'Capacity (MW)'} by Province",
+        height=360, yaxis_title=unit, margin=dict(l=10, r=10, t=40, b=10),
+    )
+    if bg_url:
+        layout_kwargs["images"] = [dict(
+            source=bg_url, xref="paper", yref="paper",
+            x=0, y=1, sizex=1, sizey=1, xanchor="left", yanchor="top",
+            sizing="stretch", opacity=0.30, layer="below",
+        )]
+        layout_kwargs["plot_bgcolor"] = "rgba(255,255,255,0.72)"
+        layout_kwargs["paper_bgcolor"] = "rgba(0,0,0,0)"
+    fig.update_layout(**layout_kwargs)
+    return fig
+
+
+@app.callback(
+    Output("plants-stage-flip-card", "children"),
+    Output("plants-stage-flip-chart", "figure"),
+    Input("type-flip-interval", "n_intervals"),
+    State("f-type", "value"), State("f-status", "value"), State("f-province", "value"),
+    State("f-capacity", "value"), State("f-tx-length", "value"), State("f-year", "data"),
+    State("f-search", "value"),
+    State("f-date-from", "value"), State("f-date-to", "value"),
+    State("f-cod-from", "value"), State("f-cod-to", "value"),
+    State("f-district", "value"), State("f-local", "value"),
+)
+def flip_plants_stage_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_year,
+                            f_search, f_date_from, f_date_to, f_cod_from, f_cod_to,
+                            f_district, f_local):
+    """Power Plants tab: cycles through one license stage at a time —
+    its own image/colour header, project count/MW, and top provinces on
+    the card, paired with a by-province chart for that same stage —
+    advancing automatically every 4 seconds so all stages (and every
+    project within them) are shown continuously without needing a click."""
+    loader = STATE["loader"]
+    empty_fig = go.Figure()
+    if loader is None or loader.error or not loader.records:
+        return None, empty_fig
+    recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                 f_district, f_local)
+    plant_recs = [r for r in recs if r["type"] != "Transmission Line"
+                  and r["status"] not in de.EXTRA_STATUS_ORDER]
+    if not plant_recs:
+        return None, empty_fig
+    stages_present = [s for s in de.STATUS_ORDER
+                       if any(r["status"] == s for r in plant_recs)]
+    if not stages_present:
+        return None, empty_fig
+    st = stages_present[n % len(stages_present)]
+    sel = [r for r in plant_recs if r["status"] == st]
+    bg_url = ss.get_status_bg_url(st)
+    card = render_single_stage_card(st, sel, bg_url, STATUS_COLOR_MAP.get(st, "#90a4ae"))
+    return card, stage_province_chart_figure(st, sel, bg_url=bg_url)
+
+
+@app.callback(
+    Output("tx-stage-flip-card", "children"),
+    Output("tx-stage-flip-chart", "figure"),
+    Input("type-flip-interval", "n_intervals"),
+    State("f-type", "value"), State("f-status", "value"), State("f-province", "value"),
+    State("f-capacity", "value"), State("f-tx-length", "value"), State("f-year", "data"),
+    State("f-search", "value"),
+    State("f-date-from", "value"), State("f-date-to", "value"),
+    State("f-cod-from", "value"), State("f-cod-to", "value"),
+    State("f-district", "value"), State("f-local", "value"),
+)
+def flip_tx_stage_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_year,
+                        f_search, f_date_from, f_date_to, f_cod_from, f_cod_to,
+                        f_district, f_local):
+    """Transmission Line tab: same rotating-stage-card pattern as Power
+    Plants, but by circuit length (km) rather than MW."""
+    loader = STATE["loader"]
+    empty_fig = go.Figure()
+    if loader is None or loader.error or not loader.records:
+        return None, empty_fig
+    recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
+                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                 f_district, f_local)
+    tx_recs = [r for r in recs if r["type"] == "Transmission Line"
+               and r["status"] not in de.EXTRA_STATUS_ORDER]
+    if not tx_recs:
+        return None, empty_fig
+    stages_present = [s for s in de.STATUS_ORDER
+                       if any(r["status"] == s for r in tx_recs)]
+    if not stages_present:
+        return None, empty_fig
+    st = stages_present[n % len(stages_present)]
+    sel = [r for r in tx_recs if r["status"] == st]
+    bg_url = ss.get_status_bg_url(st)
+    card = render_single_stage_card(st, sel, bg_url, STATUS_COLOR_MAP.get(st, "#90a4ae"),
+                                     is_transmission=True)
+    return card, stage_province_chart_figure(st, sel, is_transmission=True, bg_url=bg_url)
 
 
 def render_plants_tab(loader, recs):
@@ -1293,10 +1570,16 @@ def render_plants_tab(loader, recs):
     fig_stage.update_layout(title="Power Plants — Capacity (MW) by License Stage", height=420,
                              yaxis_title="MW", margin=dict(l=10, r=10, t=40, b=10))
 
+    stage_flip_row = dbc.Row([
+        dbc.Col(html.Div(id="plants-stage-flip-card", style={"height": "360px"}), md=5),
+        dbc.Col(dcc.Graph(id="plants-stage-flip-chart", style={"height": "360px"}), md=7),
+    ], className="mb-3")
+
     stage_section = dbc.Row([
         dbc.Col(html.Div([html.H5("All License Stages")] + stage_rows), md=5),
         dbc.Col(dcc.Graph(figure=fig_stage), md=7),
     ], className="mb-4")
+    stage_section = html.Div([stage_flip_row, html.Hr(), stage_section])
 
     prov_totals, prov_stages = compute_breakdown(plant_recs, "province")
     provinces_present = [p for p in de.PROVINCE_ORDER if p in prov_totals] + \
@@ -1369,10 +1652,16 @@ def render_transmission_tab(loader, recs):
     fig_stage.update_layout(title="Transmission Lines — Length (km) by License Stage", height=420,
                              yaxis_title="km", margin=dict(l=10, r=10, t=40, b=10))
 
+    stage_flip_row = dbc.Row([
+        dbc.Col(html.Div(id="tx-stage-flip-card", style={"height": "360px"}), md=5),
+        dbc.Col(dcc.Graph(id="tx-stage-flip-chart", style={"height": "360px"}), md=7),
+    ], className="mb-3")
+
     stage_section = dbc.Row([
         dbc.Col(html.Div([html.H5("All License Stages")] + stage_rows), md=5),
         dbc.Col(dcc.Graph(figure=fig_stage), md=7),
     ], className="mb-4")
+    stage_section = html.Div([stage_flip_row, html.Hr(), stage_section])
 
     # ── Voltage class breakdown: count, length, and capacity per class ──
     by_volt = defaultdict(lambda: [0, 0.0, 0.0])
