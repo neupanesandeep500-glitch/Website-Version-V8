@@ -472,8 +472,9 @@ def bootstrap_on_startup():
     if sheet_url:
         try:
             load_from_google_sheet(sheet_url)
-        except Exception:
+        except Exception as exc:
             traceback.print_exc()
+            STATE["error"] = str(exc)
             if os.path.exists(WORKBOOK_PATH):
                 try:
                     load_from_path(WORKBOOK_PATH, "Cached workbook (Sheet fetch failed)")
@@ -509,8 +510,10 @@ def start_background_refresh():
                 load_pa_from_drive(pa_url)
             if sheet_url:
                 load_from_google_sheet(sheet_url)
-        except Exception:
+        except Exception as exc:
             traceback.print_exc()
+            if STATE.get("loader") is None:
+                STATE["error"] = str(exc)
         finally:
             t = threading.Timer(_REFRESH_INTERVAL_SECONDS, _tick)
             t.daemon = True
