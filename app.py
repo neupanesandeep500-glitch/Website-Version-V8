@@ -1389,22 +1389,26 @@ def flip_type_card(n):
     set on another tab (see toggle_filter_sidebar / render_tab)."""
     loader = STATE["loader"]
     empty_fig = go.Figure()
-    if loader is None or loader.error or not loader.records:
-        return None, empty_fig
-    recs = [r for r in loader.records if r["status"] not in de.EXTRA_STATUS_ORDER]
-    if not recs:
-        return None, empty_fig
-    totals, stages = compute_breakdown(recs, "type")
-    types = [t for t in de.TYPE_ORDER if t in totals] + \
-            [t for t in totals if t not in de.TYPE_ORDER]
-    if not types:
-        return None, empty_fig
-    t = types[n % len(types)]
-    bg_url = ss.get_type_bg_url(t)
-    card = render_category_card(t, stages[t], totals[t][0], totals[t][1],
-                                 bg_url, TYPE_COLOR_MAP.get(t, "#607d8b"),
-                                 total_km=totals[t][2], stage_order=FLIP_CARD_STAGE_ORDER)
-    return card, type_flip_chart_figure(t, stages[t], bg_url=bg_url)
+    try:
+        if loader is None or loader.error or not loader.records:
+            return None, empty_fig
+        recs = [r for r in loader.records if r["status"] not in de.EXTRA_STATUS_ORDER]
+        if not recs:
+            return None, empty_fig
+        totals, stages = compute_breakdown(recs, "type")
+        types = [t for t in de.TYPE_ORDER if t in totals] + \
+                [t for t in totals if t not in de.TYPE_ORDER]
+        if not types:
+            return None, empty_fig
+        t = types[n % len(types)]
+        bg_url = ss.get_type_bg_url(t)
+        card = render_category_card(t, stages[t], totals[t][0], totals[t][1],
+                                     bg_url, TYPE_COLOR_MAP.get(t, "#607d8b"),
+                                     total_km=totals[t][2], stage_order=FLIP_CARD_STAGE_ORDER)
+        return card, type_flip_chart_figure(t, stages[t], bg_url=bg_url)
+    except Exception as exc:
+        traceback.print_exc()
+        return dbc.Alert(f"Overview card failed to render: {exc}", color="danger"), empty_fig
 
 
 def render_single_stage_card(stage, sel_recs, bg_url, base_color, is_transmission=False):
@@ -1509,24 +1513,28 @@ def flip_plants_stage_card(n, f_type, f_status, f_province, f_capacity, f_tx_len
     project within them) are shown continuously without needing a click."""
     loader = STATE["loader"]
     empty_fig = go.Figure()
-    if loader is None or loader.error or not loader.records:
-        return None, empty_fig
-    recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
-                                 f_district, f_local)
-    plant_recs = [r for r in recs if r["type"] != "Transmission Line"
-                  and r["status"] not in de.EXTRA_STATUS_ORDER]
-    if not plant_recs:
-        return None, empty_fig
-    stages_present = [s for s in de.STATUS_ORDER
-                       if any(r["status"] == s for r in plant_recs)]
-    if not stages_present:
-        return None, empty_fig
-    st = stages_present[n % len(stages_present)]
-    sel = [r for r in plant_recs if r["status"] == st]
-    bg_url = ss.get_status_bg_url(st)
-    card = render_single_stage_card(st, sel, bg_url, STATUS_COLOR_MAP.get(st, "#90a4ae"))
-    return card, stage_province_chart_figure(st, sel, bg_url=bg_url)
+    try:
+        if loader is None or loader.error or not loader.records:
+            return None, empty_fig
+        recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
+                                     f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                     f_district, f_local)
+        plant_recs = [r for r in recs if r["type"] != "Transmission Line"
+                      and r["status"] not in de.EXTRA_STATUS_ORDER]
+        if not plant_recs:
+            return None, empty_fig
+        stages_present = [s for s in de.STATUS_ORDER
+                           if any(r["status"] == s for r in plant_recs)]
+        if not stages_present:
+            return None, empty_fig
+        st = stages_present[n % len(stages_present)]
+        sel = [r for r in plant_recs if r["status"] == st]
+        bg_url = ss.get_status_bg_url(st)
+        card = render_single_stage_card(st, sel, bg_url, STATUS_COLOR_MAP.get(st, "#90a4ae"))
+        return card, stage_province_chart_figure(st, sel, bg_url=bg_url)
+    except Exception as exc:
+        traceback.print_exc()
+        return dbc.Alert(f"Power Plants card failed to render: {exc}", color="danger"), empty_fig
 
 
 @app.callback(
@@ -1547,25 +1555,29 @@ def flip_tx_stage_card(n, f_type, f_status, f_province, f_capacity, f_tx_length,
     Plants, but by circuit length (km) rather than MW."""
     loader = STATE["loader"]
     empty_fig = go.Figure()
-    if loader is None or loader.error or not loader.records:
-        return None, empty_fig
-    recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
-                                 f_district, f_local)
-    tx_recs = [r for r in recs if r["type"] == "Transmission Line"
-               and r["status"] not in de.EXTRA_STATUS_ORDER]
-    if not tx_recs:
-        return None, empty_fig
-    stages_present = [s for s in de.STATUS_ORDER
-                       if any(r["status"] == s for r in tx_recs)]
-    if not stages_present:
-        return None, empty_fig
-    st = stages_present[n % len(stages_present)]
-    sel = [r for r in tx_recs if r["status"] == st]
-    bg_url = ss.get_status_bg_url(st)
-    card = render_single_stage_card(st, sel, bg_url, STATUS_COLOR_MAP.get(st, "#90a4ae"),
-                                     is_transmission=True)
-    return card, stage_province_chart_figure(st, sel, is_transmission=True, bg_url=bg_url)
+    try:
+        if loader is None or loader.error or not loader.records:
+            return None, empty_fig
+        recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
+                                     f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                     f_district, f_local)
+        tx_recs = [r for r in recs if r["type"] == "Transmission Line"
+                   and r["status"] not in de.EXTRA_STATUS_ORDER]
+        if not tx_recs:
+            return None, empty_fig
+        stages_present = [s for s in de.STATUS_ORDER
+                           if any(r["status"] == s for r in tx_recs)]
+        if not stages_present:
+            return None, empty_fig
+        st = stages_present[n % len(stages_present)]
+        sel = [r for r in tx_recs if r["status"] == st]
+        bg_url = ss.get_status_bg_url(st)
+        card = render_single_stage_card(st, sel, bg_url, STATUS_COLOR_MAP.get(st, "#90a4ae"),
+                                         is_transmission=True)
+        return card, stage_province_chart_figure(st, sel, is_transmission=True, bg_url=bg_url)
+    except Exception as exc:
+        traceback.print_exc()
+        return dbc.Alert(f"Transmission card failed to render: {exc}", color="danger"), empty_fig
 
 
 def render_plants_tab(loader, recs):
