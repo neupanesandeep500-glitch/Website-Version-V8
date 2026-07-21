@@ -103,6 +103,7 @@ def _sync_state_from_config():
     STATE["last_sync"] = cfg.get("last_sync")
     STATE["type_bg"] = cfg.get("type_bg", {})
     STATE["province_bg"] = cfg.get("province_bg", {})
+    STATE["status_bg"] = cfg.get("status_bg", {})
     STATE["visitor_count"] = cfg.get("visitor_count", 0)
     return cfg
 
@@ -646,3 +647,30 @@ def set_province_bg(province_name, filename):
     d[slug] = filename
     STATE["province_bg"] = d
     _save_config(province_bg=d)
+
+
+def get_status_bg_path(status_name):
+    """Mirrors get_type_bg_path/get_province_bg_path — per-license-stage
+    background photo, shown behind the rotating stage card on the Power
+    Plants / Transmission Line tabs (same 'own image' pattern already used
+    for project types and provinces)."""
+    slug = slugify_type(status_name)
+    fn = STATE.get("status_bg", {}).get(slug)
+    if fn and os.path.exists(os.path.join(ASSETS_DIR, fn)):
+        return os.path.join(ASSETS_DIR, fn)
+    return None
+
+
+def get_status_bg_url(status_name):
+    slug = slugify_type(status_name)
+    if STATE.get("status_bg", {}).get(slug):
+        return f"/assets-status-bg/{slug}"
+    return None
+
+
+def set_status_bg(status_name, filename):
+    slug = slugify_type(status_name)
+    d = dict(STATE.get("status_bg") or {})
+    d[slug] = filename
+    STATE["status_bg"] = d
+    _save_config(status_bg=d)
