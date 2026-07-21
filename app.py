@@ -664,7 +664,8 @@ def handle_data_source(_init, _poll):
     footer_update = f"🕒 Last Update: {last_sync}" if last_sync else "🕒 Last Update: —"
 
     if loader is None or loader.error:
-        msg = (f"⚠️ {loader.error}" if loader and loader.error
+        detail = (loader.error if (loader and loader.error) else ss.STATE.get("error"))
+        msg = (f"⚠️ {detail}" if detail
                else "No data loaded yet. An administrator can add a data source via /admin.")
         return (msg, [], [], [], [2050, 2085], footer_update)
 
@@ -912,7 +913,8 @@ def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_yea
                f_district, f_local):
     loader = STATE["loader"]
     if loader is None or loader.error or not loader.records:
-        detail = f" Details: {loader.error}" if (loader and loader.error) else ""
+        err_detail = (loader.error if (loader and loader.error) else STATE.get("error"))
+        detail = f" Details: {err_detail}" if err_detail else ""
         return dbc.Alert([
             html.Div("No project data is loaded yet.", className="fw-semibold"),
             html.Div([
