@@ -516,6 +516,25 @@ TAB_DEFAULT_FILTER_GROUP = {
 }
 
 
+@app.callback(
+    Output("filter-sidebar-col", "style"),
+    Output("main-content-col", "md"),
+    Input("main-tabs", "active_tab"),
+)
+def toggle_filter_sidebar(tab):
+    """Overview is an always-unfiltered, at-a-glance view — no filter
+    scheme shown, and the content column expands to fill the space the
+    sidebar would have used. Every other tab (Power Plants, Transmission
+    Line, GoN Studied Projects, License Cancelled, Growth Trends, GIS Map,
+    Comparative Charts, Data Table) keeps the sidebar and its filters
+    exactly as before. The filter components themselves stay mounted in
+    the DOM either way (only their column's visibility changes) so every
+    other callback that reads them keeps working unchanged."""
+    if tab == "overview":
+        return {"display": "none"}, 12
+    return {"display": "block"}, 9
+
+
 @app.callback(Output("filter-tree", "active_item"), Input("main-tabs", "active_tab"))
 def open_relevant_filter_group(tab):
     default = TAB_DEFAULT_FILTER_GROUP.get(tab, "grp-project")
@@ -586,8 +605,9 @@ app.layout = dbc.Container(fluid=True, children=[
     # tab's KPI summary + stage detail (image middle / chart right) on
     # the right.
     dbc.Row(className="mt-3", children=[
-        dbc.Col(md=3, children=[sidebar(), html.Div(className="mt-3"), settings_panel()]),
-        dbc.Col(md=9, children=[
+        dbc.Col(id="filter-sidebar-col", md=3,
+                children=[sidebar(), html.Div(className="mt-3"), settings_panel()]),
+        dbc.Col(id="main-content-col", md=9, children=[
             dbc.Row(id="kpi-row", className="g-3 mb-3"),
             html.Div(id="tab-content"),
         ]),
@@ -768,6 +788,7 @@ def update_local_options(f_district, f_province, _status):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.callback(
     Output("kpi-row", "children"),
+    Input("main-tabs", "active_tab"),
     Input("f-type", "value"), Input("f-status", "value"), Input("f-province", "value"),
     Input("f-capacity", "value"), Input("f-tx-length", "value"), Input("f-year", "data"),
     Input("f-search", "value"),
@@ -776,11 +797,19 @@ def update_local_options(f_district, f_province, _status):
     Input("f-district", "value"), Input("f-local", "value"),
     Input("load-status", "children"),
 )
-def update_kpis(f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
+def update_kpis(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
                  f_date_from, f_date_to, f_cod_from, f_cod_to, f_district, f_local, _status):
-    recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
-                                 f_district, f_local)
+    loader = STATE["loader"]
+    # Overview has no visible filter sidebar (see toggle_filter_sidebar) —
+    # its KPI cards always reflect every loaded record, not whatever the
+    # filter dropdowns happen to hold from a visit to another tab. Filters
+    # only drive the KPI numbers on the other tabs, same as before.
+    if tab == "overview":
+        recs = list(loader.records) if loader and not loader.error else []
+    else:
+        recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
+                                     f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
+                                     f_district, f_local)
 
     # "Active" pipeline records only — Cancelled / GoN Study Project /
     # Technical Clearance are a different bucket entirely (they never had,
@@ -898,6 +927,24 @@ def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_yea
             ], className="small mt-1"),
         ], color="info", className="mt-3")
 
+    # Overview is the always-unfiltered, at-a-glance view — no sidebar is
+    # shown there (see toggle_filter_sidebar), and it always renders from
+    # every loaded record rather than whatever the filter dropdowns
+    # happen to be set to (they may still hold a selection made earlier
+    # on another tab). Filters only apply to the tabs below.
+    if tab == "overview":
+        try:
+            all_active_recs = [r for r in loader.records if r["status"] not in de.EXTRA_STATUS_ORDER]
+            return render_overview(loader, all_active_recs)
+        except Exception:
+            tb = traceback.format_exc()
+            traceback.print_exc()
+            return dbc.Alert([
+                html.Div("This tab hit an error while rendering: overview",
+                          className="fw-semibold"),
+                html.Pre(tb, className="small mt-2", style={"whiteSpace": "pre-wrap"}),
+            ], color="danger", className="mt-3")
+
     recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
                                  f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
                                  f_district, f_local)
@@ -910,8 +957,6 @@ def render_tab(tab, f_type, f_status, f_province, f_capacity, f_tx_length, f_yea
     active_recs = [r for r in recs if r["status"] not in de.EXTRA_STATUS_ORDER]
 
     try:
-        if tab == "overview":
-            return render_overview(loader, active_recs)
         if tab == "plants":
             return render_plants_tab(loader, active_recs)
         if tab == "transmission":
@@ -1278,44 +1323,17 @@ def status_pie(recs, title):
 
 
 def render_overview(loader, recs):
-    by_type, _ = compute_breakdown(recs, "type")
-    types = [t for t in de.TYPE_ORDER if t in by_type] + \
-            [t for t in by_type if t not in de.TYPE_ORDER]
-
-    fig_type = go.Figure(go.Bar(
-        x=[by_type[t][1] for t in types], y=types, orientation="h",
-        marker_color=[TYPE_COLOR_MAP.get(t, "#607d8b") for t in types],
-        text=[f"{by_type[t][1]:.1f} MW" for t in types], textposition="outside",
-    ))
-    fig_type.update_layout(title="Capacity by Project Type", height=380,
-                            margin=dict(l=10, r=10, t=40, b=10),
-                            xaxis_title="Capacity (MW)")
-
-    # Power plants and transmission lines get their own license-stage
-    # breakdown instead of one chart mixing both together.
-    plant_recs = [r for r in recs if r["type"] != "Transmission Line"]
-    tx_recs = [r for r in recs if r["type"] == "Transmission Line"]
-    fig_status_plants = status_pie(plant_recs, "Power Plants — License Stage Breakdown")
-    fig_status_tx = status_pie(tx_recs, "Transmission Lines — License Stage Breakdown")
-
-    top_row = dbc.Row([
+    """Overview is intentionally just one thing: the license-activity card
+    that auto-advances through project types on a timer (type-flip-interval,
+    every 4s), each with its own admin-uploaded background image, paired
+    with that type's own license-stage chart on the right
+    (type-flip-card / type-flip-chart, populated by flip_type_card()).
+    No filter sidebar and no other charts here — those live on the other
+    tabs (Power Plants, Transmission Line, etc.)."""
+    return dbc.Row([
         dbc.Col(html.Div(id="type-flip-card", style={"height": "360px"}), md=5),
         dbc.Col(dcc.Graph(id="type-flip-chart", style={"height": "360px"}), md=7),
     ], className="mb-3")
-
-    sub_tabs = dbc.Tabs([
-        dbc.Tab(dcc.Graph(figure=fig_type), label="All Project Types",
-                tab_style={"marginTop": "10px"}),
-        dbc.Tab(
-            dbc.Row([
-                dbc.Col(dcc.Graph(figure=fig_status_plants), md=6),
-                dbc.Col(dcc.Graph(figure=fig_status_tx), md=6),
-            ], className="mt-2"),
-            label="License Stage Breakdown",
-        ),
-    ])
-
-    return html.Div([top_row, html.Hr(), sub_tabs])
 
 
 def type_flip_chart_figure(t, stage_map, bg_url=None):
@@ -1359,26 +1377,19 @@ def type_flip_chart_figure(t, stage_map, bg_url=None):
     Output("type-flip-card", "children"),
     Output("type-flip-chart", "figure"),
     Input("type-flip-interval", "n_intervals"),
-    State("f-type", "value"), State("f-status", "value"), State("f-province", "value"),
-    State("f-capacity", "value"), State("f-tx-length", "value"), State("f-year", "data"),
-    State("f-search", "value"),
-    State("f-date-from", "value"), State("f-date-to", "value"),
-    State("f-cod-from", "value"), State("f-cod-to", "value"),
-    State("f-district", "value"), State("f-local", "value"),
 )
-def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_tx_length, f_year, f_search,
-                    f_date_from, f_date_to, f_cod_from, f_cod_to, f_district, f_local):
+def flip_type_card(n):
     """Cycles through one project-type card at a time on the Overview tab
     (standard-sized background image + stage detail) with its paired
     capacity-by-stage chart flipping in the same step, advancing
-    automatically every 4 seconds."""
+    automatically every 4 seconds. Always reads the full loaded dataset —
+    Overview has no filter sidebar, so this never depends on filter state
+    set on another tab (see toggle_filter_sidebar / render_tab)."""
     loader = STATE["loader"]
     empty_fig = go.Figure()
     if loader is None or loader.error or not loader.records:
         return None, empty_fig
-    recs = get_filtered_records(f_type, f_status, f_province, f_capacity, f_year, f_search,
-                                 f_date_from, f_date_to, f_cod_from, f_cod_to, f_tx_length,
-                                 f_district, f_local)
+    recs = [r for r in loader.records if r["status"] not in de.EXTRA_STATUS_ORDER]
     if not recs:
         return None, empty_fig
     totals, stages = compute_breakdown(recs, "type")
