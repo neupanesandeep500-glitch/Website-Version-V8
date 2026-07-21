@@ -425,9 +425,25 @@ def bootstrap_on_startup():
     mount path), the values saved in config.json by previous admin syncs
     take priority over the env vars — so a more recent admin-panel change
     always wins over the original bootstrap default.
+
+    ROOT CAUSE OF "no data on every tab" (found this session): every tab
+    was empty because STATE["loader"] was never populated — this function
+    only ever checked config.json and the DEFAULT_SHEET_URL environment
+    variable, both unset unless someone has been into Render's
+    Environment tab. But the real Google Sheet this dashboard was built
+    against isn't a secret pending configuration — it's already sitting
+    in `data_engine.py` as the module-level `DEFAULT_SHEET_URL` constant
+    (the same URL the original desktop app shipped as its default
+    cloud-sync source). The web port never wired that fallback in, so a
+    fresh deploy with no env vars set booted with zero data sources and
+    every tab showed "No project data is loaded yet." Now
+    `de.DEFAULT_SHEET_URL` is the final fallback below config.json and
+    the env var, so the dashboard has real data from the first boot; an
+    env var or an admin-panel sync still overrides it exactly as before.
     """
     cfg = _read_config_file()
-    sheet_url = cfg.get("gs_url") or os.environ.get("DEFAULT_SHEET_URL")
+    sheet_url = (cfg.get("gs_url") or os.environ.get("DEFAULT_SHEET_URL")
+                 or de.DEFAULT_SHEET_URL)
     gis_url = cfg.get("gis_drive_url") or os.environ.get("DEFAULT_GIS_DRIVE_URL")
     pa_url = cfg.get("pa_drive_url") or os.environ.get("DEFAULT_PA_DRIVE_URL")
 
@@ -483,7 +499,8 @@ def start_background_refresh():
     def _tick():
         try:
             cfg = _read_config_file()
-            sheet_url = cfg.get("gs_url") or os.environ.get("DEFAULT_SHEET_URL")
+            sheet_url = (cfg.get("gs_url") or os.environ.get("DEFAULT_SHEET_URL")
+                         or de.DEFAULT_SHEET_URL)
             gis_url = cfg.get("gis_drive_url") or os.environ.get("DEFAULT_GIS_DRIVE_URL")
             pa_url = cfg.get("pa_drive_url") or os.environ.get("DEFAULT_PA_DRIVE_URL")
             if gis_url:
